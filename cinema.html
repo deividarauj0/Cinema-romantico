@@ -199,9 +199,8 @@
         } else {
             originalList.forEach(original => {
                 const existingIndex = movies.findIndex(m => m.title.toLowerCase() === original.title.toLowerCase());
-                if (existingIndex === -1) {
-                    movies.push(original);
-                } else {
+                // Corrigido: Não força mais a adição do filme se ele não existir (pois pode ter sido apagado!)
+                if (existingIndex !== -1) {
                     if (original.img.includes('image_')) {
                         movies[existingIndex].img = original.img;
                     }
