@@ -45,7 +45,26 @@
         .ai-pulse {
             animation: pulse-heart 2s infinite;
         }
+
+        /* Nova animação para destacar o filme sorteado */
+        @keyframes highlight-card {
+            0%, 100% { box-shadow: 0 0 0 rgba(244, 63, 94, 0); border-color: rgba(159, 18, 57, 0.2); transform: scale(1); }
+            50% { box-shadow: 0 0 30px rgba(244, 63, 94, 0.8); border-color: rgba(244, 63, 94, 1); transform: scale(1.05); z-index: 10; }
+        }
+        .highlight-active {
+            animation: highlight-card 1.5s ease-in-out 2;
+            border-color: rgba(244, 63, 94, 0.8) !important;
+        }
         
+        /* Ocultar barra de rolagem dos filtros (mantendo o scroll por toque) */
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none; /* Chrome, Safari e Opera */
+        }
+        .scrollbar-hide {
+            -ms-overflow-style: none; /* IE e Edge */
+            scrollbar-width: none; /* Firefox */
+        }
+
         /* Background animado sutil para dar um clima romântico */
         .bg-romantic {
             background: radial-gradient(circle at top right, #3b0764, #0f172a 40%),
@@ -56,21 +75,23 @@
 </head>
 <body class="min-h-screen pb-12 custom-scrollbar bg-romantic">
 
-    <!-- Header -->
-    <header class="bg-slate-950/40 backdrop-blur-md border-b border-rose-900/30 sticky top-0 z-50 px-4 py-5 shadow-2xl">
-        <div class="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+    <!-- Header Otimizado -->
+    <header class="bg-slate-950/40 backdrop-blur-md border-b border-rose-900/30 sticky top-0 z-50 px-4 py-3 shadow-2xl">
+        <div class="max-w-6xl mx-auto flex flex-col gap-3">
             <div class="text-center md:text-left">
-                <h1 class="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-rose-400 to-pink-300 flex items-center gap-2 justify-center md:justify-start">
+                <h1 class="text-xl md:text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-rose-400 to-pink-300 flex items-center gap-2 justify-center md:justify-start">
                     <span>🍿</span> Cinema da Sofia e Deivid
                 </h1>
-                <p class="text-rose-200/70 text-xs mt-1 font-semibold tracking-wider uppercase">Onde escolhemos nossos filmes 💕</p>
             </div>
-            <div class="flex flex-wrap items-center justify-center gap-3 w-full md:w-auto">
-                <input id="search" type="text" placeholder="Buscar um filme..." 
-                    class="bg-black/20 border border-rose-900/30 rounded-xl px-4 py-2 w-full md:w-48 lg:w-64 focus:ring-2 focus:ring-rose-500 transition-all outline-none text-rose-100 placeholder-rose-300/50">
+            
+            <div class="flex items-center gap-2 w-full">
+                <div class="relative flex-1">
+                    <input id="search" type="text" placeholder="Buscar um filme..." 
+                        class="bg-black/20 border border-rose-900/30 rounded-xl px-4 py-2 w-full focus:ring-2 focus:ring-rose-500 transition-all outline-none text-rose-100 placeholder-rose-300/50 text-sm">
+                </div>
                 
-                <button onclick="randomPick()" class="bg-rose-950/50 hover:bg-rose-900 text-rose-300 p-2.5 rounded-xl transition-all border border-rose-800/50 shadow-lg" title="Deixa o destino escolher 🎲">
-                    🎲
+                <button onclick="randomPick()" class="bg-rose-950/50 hover:bg-rose-900 text-rose-300 p-2 rounded-xl transition-all border border-rose-800/50 shadow-lg shrink-0 flex items-center justify-center h-[38px] w-[38px]" title="Deixa o destino escolher 🎲">
+                    <span class="text-lg">🎲</span>
                 </button>
             </div>
         </div>
@@ -153,7 +174,7 @@
         </div>
     </div>
 
-    <!-- Modal de Sugestão/IA -->
+    <!-- Modal de Sugestão -->
     <div id="modal" class="fixed inset-0 bg-slate-950/80 z-[100] hidden items-center justify-center p-4 backdrop-blur-md transition-all">
         <div class="bg-slate-900 p-8 rounded-[2rem] max-w-lg w-full text-center border border-rose-800/50 shadow-[0_0_50px_rgba(225,29,72,0.15)] animate-in fade-in zoom-in duration-300">
             <p id="modal-tag" class="text-rose-400 font-extrabold uppercase tracking-widest text-xs mb-3 bg-rose-950/50 inline-block px-4 py-1.5 rounded-full">Sugestão Mágica</p>
@@ -169,7 +190,7 @@
     <script>
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'cine-casal-v2';
 
-        // Filmes originais agora com status ao invés de booleanos
+        // Filmes originais
         const originalList = [
             { id: 1, title: "Os Vingadores", img: "https://image.tmdb.org/t/p/w500/RYMX2wcKCBAr24UyPD7xwmjaTn.jpg", status: 'conchinha', rating: 0, synopsis: "" },
             { id: 2, title: "Vingadores Era de Ultron", img: "https://image.tmdb.org/t/p/w500/4ssDuvEDkSArWEdyBl2X5EHvYKU.jpg", status: 'conchinha', rating: 0, synopsis: "" },
@@ -182,13 +203,12 @@
             { id: 9, title: "Vingadores Doomsday", img: "./image_5f9ddc.png", status: 'cinema', rating: 0, synopsis: "" }
         ];
 
-        // Carrega do LocalStorage e faz a migração automática das versões antigas
+        // Carrega do LocalStorage
         let movies = JSON.parse(localStorage.getItem('couple_movies_v4'));
         
         if (!movies || movies.length === 0) {
             let oldMovies = JSON.parse(localStorage.getItem('couple_movies_v3'));
             if(oldMovies && oldMovies.length > 0) {
-                // Se vocês tinham salvos na versão anterior, convertemos para o novo formato de status
                 movies = oldMovies.map(m => {
                     if(!m.status) m.status = m.watched ? 'assistido' : 'conchinha';
                     return m;
@@ -199,7 +219,6 @@
         } else {
             originalList.forEach(original => {
                 const existingIndex = movies.findIndex(m => m.title.toLowerCase() === original.title.toLowerCase());
-                // Corrigido: Não força mais a adição do filme se ele não existir (pois pode ter sido apagado!)
                 if (existingIndex !== -1) {
                     if (original.img.includes('image_')) {
                         movies[existingIndex].img = original.img;
@@ -213,8 +232,13 @@
 
         // --- CORE FUNCTIONS ---
         function save() {
-            localStorage.setItem('couple_movies_v4', JSON.stringify(movies));
-            render();
+            try {
+                localStorage.setItem('couple_movies_v4', JSON.stringify(movies));
+                render();
+            } catch (e) {
+                alert("A memória do navegador está cheia! Não foi possível salvar o filme. Tente limpar o cache do navegador ou apagar alguns filmes antigos.");
+                console.error("Erro ao salvar no localStorage:", e);
+            }
         }
 
         async function addMovie() {
@@ -223,24 +247,35 @@
             
             if (!titleInput.value.trim()) return;
 
-            let finalImg = "";
-
             if (fileInput.files && fileInput.files.length > 0) {
                 const file = fileInput.files[0];
                 const reader = new FileReader();
+                
                 reader.onload = function(e) {
-                    finalImg = e.target.result;
-                    completeAddMovie(titleInput.value, finalImg);
+                    const img = new Image();
+                    img.onload = function() {
+                        const canvas = document.createElement('canvas');
+                        const maxWidth = 400;
+                        const scale = maxWidth / img.width;
+                        canvas.width = maxWidth;
+                        canvas.height = img.height * scale;
+                        
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        
+                        const finalImg = canvas.toDataURL('image/jpeg', 0.7);
+                        completeAddMovie(titleInput.value, finalImg);
+                    };
+                    img.src = e.target.result;
                 };
                 reader.readAsDataURL(file);
             } else {
-                finalImg = `https://via.placeholder.com/300x450/4c1d95/f43f5e?text=${encodeURIComponent(titleInput.value)}`;
+                const finalImg = `https://via.placeholder.com/300x450/4c1d95/f43f5e?text=${encodeURIComponent(titleInput.value)}`;
                 completeAddMovie(titleInput.value, finalImg);
             }
         }
 
         function completeAddMovie(title, imgData) {
-            // Pega qual categoria foi selecionada nas bolinhas
             const selectedStatus = document.querySelector('input[name="newStatus"]:checked').value;
             
             const newMovie = {
@@ -257,11 +292,10 @@
             document.getElementById('newTitle').value = "";
             document.getElementById('newImgFile').value = "";
             document.getElementById('fileNameDisplay').innerHTML = 'Tocar para escolher foto da galeria<br><span class="text-xs font-normal opacity-70">(ou deixe vazio para uma capa padrão)</span>';
-            // Reseta a seleção para 'conchinha'
             document.querySelector('input[value="conchinha"]').checked = true;
             
             save();
-            closeAddModal(); // Fecha o modal após adicionar com sucesso
+            closeAddModal();
         }
 
         function updateFileName(input) {
@@ -273,7 +307,7 @@
             }
         }
 
-        function showModal(tag, title, content) {
+        function showModal(tag, title, content, onConfirm = closeModal) {
             document.getElementById('modal-tag').innerText = tag;
             document.getElementById('modal-title').innerText = title;
             document.getElementById('modal-content').innerText = content;
@@ -281,10 +315,9 @@
             document.getElementById('modal').classList.add('flex');
             
             const btn = document.getElementById('modal-action-btn');
-            btn.onclick = closeModal;
+            btn.onclick = onConfirm;
         }
 
-        // Nova função para mudar categoria do filme diretamente no card
         function changeStatus(id, newStatus) {
             const movie = movies.find(m => m.id === id);
             if (movie) movie.status = newStatus;
@@ -314,14 +347,39 @@
         }
 
         function randomPick() {
-            // Só sorteia filmes que ainda não foram assistidos
             const pending = movies.filter(m => m.status !== 'assistido');
             if (pending.length === 0) return alert("Vocês já viram todos os filmes da lista!");
             const random = pending[Math.floor(Math.random() * pending.length)];
             
             const ondeVer = random.status === 'cinema' ? "Para ver no Cinema 🍿" : "Sessão de Conchinha 🛋️";
             
-            showModal("🎲 O Destino Escolheu", random.title, ondeVer);
+            showModal("🎲 O Destino Escolheu", random.title, ondeVer, () => {
+                closeModal();
+                scrollToMovie(random.id, random.status);
+            });
+        }
+
+        // Função para deslizar a tela até o filme e destacá-lo
+        function scrollToMovie(id, status) {
+            // Se o filme sorteado não estiver na aba atual, muda para a aba correta
+            if (currentFilter !== 'all' && currentFilter !== status) {
+                setFilter(status);
+            }
+            
+            // Aguarda um instante para a grade renderizar se tiver mudado de filtro
+            setTimeout(() => {
+                const card = document.getElementById(`movie-${id}`);
+                if (card) {
+                    // Desliza a tela suavemente até a capa
+                    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // Adiciona a animação de destaque
+                    card.classList.add('highlight-active');
+                    // Remove a classe após a animação (3 segundos)
+                    setTimeout(() => {
+                        card.classList.remove('highlight-active');
+                    }, 3000);
+                }
+            }, 100);
         }
 
         function closeModal() {
@@ -329,7 +387,6 @@
             document.getElementById('modal').classList.remove('flex');
         }
 
-        // Funções para abrir e fechar o modal de Adicionar Filme
         function openAddModal() {
             document.getElementById('add-movie-modal').classList.remove('hidden');
             document.getElementById('add-movie-modal').classList.add('flex');
@@ -361,11 +418,12 @@
 
             filtered.forEach(m => {
                 const card = document.createElement("div");
+                card.id = `movie-${m.id}`; // Adicionando ID único para poder buscar o card depois
                 card.className = `movie-card relative bg-slate-900/50 backdrop-blur-sm rounded-3xl overflow-hidden shadow-xl border border-rose-900/20 flex flex-col group hover:border-rose-500/50 transition-all`;
 
                 let starsHtml = "";
                 for(let i=1; i<=5; i++) {
-                    starsHtml += `<span class="cursor-pointer text-xl drop-shadow-md transition-colors ${i <= m.rating ? 'text-rose-500 scale-110' : 'text-white/10 hover:text-rose-300'}" onclick="rate(${m.id}, ${i})">♥</span>`;
+                    starsHtml += `<button type="button" class="cursor-pointer text-2xl drop-shadow-md transition-all p-1 -m-1 active:scale-125 ${i <= m.rating ? 'text-rose-500 scale-110' : 'text-white/20 md:hover:text-rose-300'}" onclick="rate(${m.id}, ${i})">♥</button>`;
                 }
 
                 card.innerHTML = `
