@@ -189,13 +189,11 @@
         </div>
     </div>
 
-    <!-- Novo Sistema de Cloud com Firebase -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Identificadores Exclusivos do Casal
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'cinema-sofia-deivid';
         let firebaseConfig = null;
         if (typeof __firebase_config !== 'undefined') {
@@ -212,8 +210,8 @@
         let movies = [];
         let currentFilter = 'all';
         let isMigrating = false;
+        let isCloudActive = false; // Flag para saber se estamos na Nuvem ou Modo Aparelho
 
-        // Lista base
         const originalList = [
             { id: 1, title: "Os Vingadores", img: "https://image.tmdb.org/t/p/w500/RYMX2wcKCBAr24UyPD7xwmjaTn.jpg", status: 'conchinha', rating: 0, synopsis: "" },
             { id: 2, title: "Vingadores Era de Ultron", img: "https://image.tmdb.org/t/p/w500/4ssDuvEDkSArWEdyBl2X5EHvYKU.jpg", status: 'conchinha', rating: 0, synopsis: "" },
@@ -226,8 +224,13 @@
             { id: 9, title: "Vingadores Doomsday", img: "./image_5f9ddc.png", status: 'cinema', rating: 0, synopsis: "" }
         ];
 
-        async function startCloudApp() {
-            if (!auth) return;
+        // --- SISTEMA DE INICIALIZAÇÃO SEGURA ---
+        async function startApp() {
+            if (!auth) {
+                // Modo offline / Aparelho local imediatamente
+                initLocalApp();
+                return;
+            }
 
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -237,48 +240,82 @@
                 }
             } catch (error) {
                 console.error("Erro na autenticação:", error);
+                initLocalApp();
+                return;
             }
 
             onAuthStateChanged(auth, (user) => {
                 if (user) {
+                    isCloudActive = true;
                     listenToCloudUpdates();
+                } else {
+                    initLocalApp();
                 }
             });
         }
 
+        function initLocalApp() {
+            isCloudActive = false;
+            document.getElementById('sync-status').innerText = "💾 Salvo no Aparelho";
+            document.getElementById('sync-status').classList.remove('animate-pulse');
+            
+            let localMovies = JSON.parse(localStorage.getItem('couple_movies_v4'));
+            if (!localMovies || localMovies.length === 0) {
+                localMovies = originalList;
+                localStorage.setItem('couple_movies_v4', JSON.stringify(localMovies));
+            }
+            movies = localMovies;
+            render();
+        }
+
+        function saveLocal() {
+            try {
+                localStorage.setItem('couple_movies_v4', JSON.stringify(movies));
+            } catch (e) {
+                alert("Memória do aparelho cheia! Não foi possível salvar.");
+            }
+        }
+
+        // --- NUVEM ---
         function listenToCloudUpdates() {
-            // Conecta na nuvem do casal
             const moviesCol = collection(db, 'artifacts', appId, 'public', 'data', 'movies');
             
             onSnapshot(moviesCol, (snapshot) => {
-                movies = [];
+                const fetchedMovies = [];
                 snapshot.forEach(doc => {
-                    movies.push({ id: doc.id, ...doc.data() });
+                    fetchedMovies.push({ id: doc.id, ...doc.data() });
                 });
                 
-                // Ordena do mais novo para o mais antigo
-                movies.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-                
-                // Se a nuvem estiver vazia, vamos migrar os filmes que estão no PC!
-                if (movies.length === 0 && !isMigrating) {
-                    const localMovies = JSON.parse(localStorage.getItem('couple_movies_v4'));
-                    if (localMovies && localMovies.length > 0) {
-                        isMigrating = true;
-                        document.getElementById('sync-status').innerText = "☁️ Enviando para a Nuvem...";
-                        migrateToCloud(localMovies);
-                    } else {
-                        isMigrating = true;
-                        migrateToCloud(originalList);
+                const hasMigrated = localStorage.getItem('cloud_migrated');
+
+                if (fetchedMovies.length === 0 && !hasMigrated && !isMigrating) {
+                    isMigrating = true;
+                    document.getElementById('sync-status').innerText = "☁️ Enviando...";
+                    
+                    let localMovies = JSON.parse(localStorage.getItem('couple_movies_v4'));
+                    if (!localMovies || localMovies.length === 0) {
+                        localMovies = originalList;
                     }
+                    movies = localMovies; 
+                    render(); // Renderiza já para não ficar o ecrã vazio
+                    
+                    migrateToCloud(localMovies).then(() => {
+                        localStorage.setItem('cloud_migrated', 'true');
+                        document.getElementById('sync-status').innerText = "☁️ Na Nuvem";
+                        document.getElementById('sync-status').classList.remove('animate-pulse');
+                        isMigrating = false;
+                    });
                 } else {
-                    document.getElementById('sync-status').innerText = "☁️ Na Nuvem";
-                    document.getElementById('sync-status').classList.remove('animate-pulse');
+                    if (!isMigrating) {
+                        movies = fetchedMovies.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                        document.getElementById('sync-status').innerText = "☁️ Na Nuvem";
+                        document.getElementById('sync-status').classList.remove('animate-pulse');
+                        render();
+                    }
                 }
-                
-                render();
             }, (error) => {
                 console.error("Erro ao sincronizar:", error);
-                document.getElementById('sync-status').innerText = "❌ Offline";
+                initLocalApp(); // Falha de segurança - cai para LocalStorage
             });
         }
 
@@ -293,16 +330,21 @@
                     synopsis: m.synopsis || "",
                     createdAt: m.id || Date.now()
                 };
+                
+                // Prevenção contra limites excessivos de imagem na nuvem
+                if (movieData.img && movieData.img.length > 800000) {
+                    movieData.img = `https://via.placeholder.com/300x450/4c1d95/f43f5e?text=${encodeURIComponent(movieData.title)}`;
+                }
+                
                 await saveMovieToCloud(docId, movieData);
             }
-            // Após enviar tudo para a nuvem, limpamos o cache antigo
             localStorage.removeItem('couple_movies_v4');
         }
 
         async function saveMovieToCloud(id, movieData) {
             if (!db) return;
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'movies', id);
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'movies', String(id));
                 await setDoc(docRef, movieData);
             } catch (e) {
                 console.error("Erro ao guardar filme na nuvem:", e);
@@ -312,14 +354,14 @@
         async function deleteMovieFromCloud(id) {
             if (!db) return;
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'movies', id);
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'movies', String(id));
                 await deleteDoc(docRef);
             } catch (e) {
                 console.error("Erro ao remover filme da nuvem:", e);
             }
         }
 
-        // Expor funções para o HTML (agora que usamos type="module")
+        // --- FUNÇÕES EXPOSTAS ---
         window.setFilter = function(filter) {
             currentFilter = filter;
             document.querySelectorAll('[id^="filter-"]').forEach(btn => {
@@ -368,6 +410,7 @@
             const docId = Date.now().toString();
             
             const newMovieData = {
+                id: docId,
                 title: title,
                 img: imgData,
                 status: selectedStatus,
@@ -376,8 +419,15 @@
                 createdAt: Date.now()
             };
 
-            // Salva direto na nuvem (o onSnapshot vai atualizar a tela automaticamente)
-            saveMovieToCloud(docId, newMovieData);
+            if (isCloudActive) {
+                const cloudData = { ...newMovieData };
+                delete cloudData.id;
+                saveMovieToCloud(docId, cloudData);
+            } else {
+                movies.unshift(newMovieData);
+                saveLocal();
+                render();
+            }
             
             document.getElementById('newTitle').value = "";
             document.getElementById('newImgFile').value = "";
@@ -408,26 +458,44 @@
         }
 
         window.changeStatus = function(id, newStatus) {
-            const movie = movies.find(m => m.id === id);
+            const movie = movies.find(m => String(m.id) === String(id));
             if (movie) {
-                const updatedMovie = { ...movie, status: newStatus };
-                delete updatedMovie.id; // limpa a cópia do ID local antes de mandar pros dados do Firestore
-                saveMovieToCloud(id, updatedMovie);
+                movie.status = newStatus;
+                if (isCloudActive) {
+                    const updatedMovie = { ...movie };
+                    delete updatedMovie.id; 
+                    saveMovieToCloud(String(id), updatedMovie);
+                } else {
+                    saveLocal();
+                    render();
+                }
             }
         }
 
         window.rate = function(id, val) {
-            const movie = movies.find(m => m.id === id);
+            const movie = movies.find(m => String(m.id) === String(id));
             if (movie) {
-                const updatedMovie = { ...movie, rating: val };
-                delete updatedMovie.id;
-                saveMovieToCloud(id, updatedMovie);
+                movie.rating = val;
+                if (isCloudActive) {
+                    const updatedMovie = { ...movie };
+                    delete updatedMovie.id;
+                    saveMovieToCloud(String(id), updatedMovie);
+                } else {
+                    saveLocal();
+                    render();
+                }
             }
         }
 
         window.deleteMovie = function(id) {
             if (confirm("Deseja remover este filme para sempre?")) {
-                deleteMovieFromCloud(id);
+                if (isCloudActive) {
+                    deleteMovieFromCloud(String(id));
+                } else {
+                    movies = movies.filter(m => String(m.id) !== String(id));
+                    saveLocal();
+                    render();
+                }
             }
         }
 
@@ -500,7 +568,6 @@
 
                 let starsHtml = "";
                 for(let i=1; i<=5; i++) {
-                    // ID envolto em aspas simples pois agora o ID é um texto (string) da nuvem
                     starsHtml += `<button type="button" class="cursor-pointer text-2xl drop-shadow-md transition-all p-1 -m-1 active:scale-125 ${i <= m.rating ? 'text-rose-500 scale-110' : 'text-white/20 md:hover:text-rose-300'}" onclick="rate('${m.id}', ${i})">♥</button>`;
                 }
 
@@ -558,8 +625,8 @@
 
         document.getElementById("search").addEventListener("input", render);
         
-        // Iniciar o Aplicativo Cloud
-        startCloudApp();
+        // Iniciar o Aplicativo
+        startApp();
     </script>
 </body>
 </html>
