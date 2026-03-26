@@ -78,10 +78,12 @@
     <!-- Header Otimizado -->
     <header class="bg-slate-950/40 backdrop-blur-md border-b border-rose-900/30 sticky top-0 z-50 px-4 py-3 shadow-2xl">
         <div class="max-w-6xl mx-auto flex flex-col gap-3">
-            <div class="text-center md:text-left">
-                <h1 class="text-xl md:text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-rose-400 to-pink-300 flex items-center gap-2 justify-center md:justify-start">
+            <div class="text-center md:text-left flex items-center justify-center md:justify-start gap-3">
+                <h1 class="text-xl md:text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-rose-400 to-pink-300 flex items-center gap-2">
                     <span>🍿</span> Cinema da Sofia e Deivid
                 </h1>
+                <!-- Nuvem de status de sincronização -->
+                <span id="sync-status" class="text-xs font-bold text-rose-300 bg-rose-900/40 px-2 py-1 rounded-md animate-pulse">☁️ Sincronizando...</span>
             </div>
             
             <div class="flex items-center gap-2 w-full">
@@ -187,10 +189,31 @@
         </div>
     </div>
 
-    <script>
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'cine-casal-v2';
+    <!-- Novo Sistema de Cloud com Firebase -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Filmes originais
+        // Identificadores Exclusivos do Casal
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'cinema-sofia-deivid';
+        let firebaseConfig = null;
+        if (typeof __firebase_config !== 'undefined') {
+            try { firebaseConfig = JSON.parse(__firebase_config); } catch (e) {}
+        }
+
+        let app, auth, db;
+        if (firebaseConfig) {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+        }
+
+        let movies = [];
+        let currentFilter = 'all';
+        let isMigrating = false;
+
+        // Lista base
         const originalList = [
             { id: 1, title: "Os Vingadores", img: "https://image.tmdb.org/t/p/w500/RYMX2wcKCBAr24UyPD7xwmjaTn.jpg", status: 'conchinha', rating: 0, synopsis: "" },
             { id: 2, title: "Vingadores Era de Ultron", img: "https://image.tmdb.org/t/p/w500/4ssDuvEDkSArWEdyBl2X5EHvYKU.jpg", status: 'conchinha', rating: 0, synopsis: "" },
@@ -203,45 +226,110 @@
             { id: 9, title: "Vingadores Doomsday", img: "./image_5f9ddc.png", status: 'cinema', rating: 0, synopsis: "" }
         ];
 
-        // Carrega do LocalStorage
-        let movies = JSON.parse(localStorage.getItem('couple_movies_v4'));
-        
-        if (!movies || movies.length === 0) {
-            let oldMovies = JSON.parse(localStorage.getItem('couple_movies_v3'));
-            if(oldMovies && oldMovies.length > 0) {
-                movies = oldMovies.map(m => {
-                    if(!m.status) m.status = m.watched ? 'assistido' : 'conchinha';
-                    return m;
-                });
-            } else {
-                movies = originalList;
+        async function startCloudApp() {
+            if (!auth) return;
+
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Erro na autenticação:", error);
             }
-        } else {
-            originalList.forEach(original => {
-                const existingIndex = movies.findIndex(m => m.title.toLowerCase() === original.title.toLowerCase());
-                if (existingIndex !== -1) {
-                    if (original.img.includes('image_')) {
-                        movies[existingIndex].img = original.img;
-                    }
+
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    listenToCloudUpdates();
                 }
             });
         }
-        localStorage.setItem('couple_movies_v4', JSON.stringify(movies));
 
-        let currentFilter = 'all';
-
-        // --- CORE FUNCTIONS ---
-        function save() {
-            try {
-                localStorage.setItem('couple_movies_v4', JSON.stringify(movies));
+        function listenToCloudUpdates() {
+            // Conecta na nuvem do casal
+            const moviesCol = collection(db, 'artifacts', appId, 'public', 'data', 'movies');
+            
+            onSnapshot(moviesCol, (snapshot) => {
+                movies = [];
+                snapshot.forEach(doc => {
+                    movies.push({ id: doc.id, ...doc.data() });
+                });
+                
+                // Ordena do mais novo para o mais antigo
+                movies.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                
+                // Se a nuvem estiver vazia, vamos migrar os filmes que estão no PC!
+                if (movies.length === 0 && !isMigrating) {
+                    const localMovies = JSON.parse(localStorage.getItem('couple_movies_v4'));
+                    if (localMovies && localMovies.length > 0) {
+                        isMigrating = true;
+                        document.getElementById('sync-status').innerText = "☁️ Enviando para a Nuvem...";
+                        migrateToCloud(localMovies);
+                    } else {
+                        isMigrating = true;
+                        migrateToCloud(originalList);
+                    }
+                } else {
+                    document.getElementById('sync-status').innerText = "☁️ Na Nuvem";
+                    document.getElementById('sync-status').classList.remove('animate-pulse');
+                }
+                
                 render();
+            }, (error) => {
+                console.error("Erro ao sincronizar:", error);
+                document.getElementById('sync-status').innerText = "❌ Offline";
+            });
+        }
+
+        async function migrateToCloud(list) {
+            for (const m of list) {
+                const docId = (m.id || Date.now()).toString();
+                const movieData = {
+                    title: m.title,
+                    img: m.img,
+                    status: m.status || 'conchinha',
+                    rating: m.rating || 0,
+                    synopsis: m.synopsis || "",
+                    createdAt: m.id || Date.now()
+                };
+                await saveMovieToCloud(docId, movieData);
+            }
+            // Após enviar tudo para a nuvem, limpamos o cache antigo
+            localStorage.removeItem('couple_movies_v4');
+        }
+
+        async function saveMovieToCloud(id, movieData) {
+            if (!db) return;
+            try {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'movies', id);
+                await setDoc(docRef, movieData);
             } catch (e) {
-                alert("A memória do navegador está cheia! Não foi possível salvar o filme. Tente limpar o cache do navegador ou apagar alguns filmes antigos.");
-                console.error("Erro ao salvar no localStorage:", e);
+                console.error("Erro ao guardar filme na nuvem:", e);
             }
         }
 
-        async function addMovie() {
+        async function deleteMovieFromCloud(id) {
+            if (!db) return;
+            try {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'movies', id);
+                await deleteDoc(docRef);
+            } catch (e) {
+                console.error("Erro ao remover filme da nuvem:", e);
+            }
+        }
+
+        // Expor funções para o HTML (agora que usamos type="module")
+        window.setFilter = function(filter) {
+            currentFilter = filter;
+            document.querySelectorAll('[id^="filter-"]').forEach(btn => {
+                btn.className = "bg-slate-900/60 hover:bg-slate-800 text-rose-200 px-6 py-2.5 rounded-full text-sm font-semibold transition-all whitespace-nowrap border border-rose-900/30 hover:border-rose-500/50";
+            });
+            document.getElementById(`filter-${filter}`).className = "bg-rose-600 text-white px-6 py-2.5 rounded-full text-sm font-bold transition-all shadow-lg shadow-rose-900/40 whitespace-nowrap border border-rose-500";
+            render();
+        }
+
+        window.addMovie = function() {
             const titleInput = document.getElementById('newTitle');
             const fileInput = document.getElementById('newImgFile');
             
@@ -255,7 +343,7 @@
                     const img = new Image();
                     img.onload = function() {
                         const canvas = document.createElement('canvas');
-                        const maxWidth = 400;
+                        const maxWidth = 400; // Compressão para a nuvem não explodir
                         const scale = maxWidth / img.width;
                         canvas.width = maxWidth;
                         canvas.height = img.height * scale;
@@ -277,28 +365,29 @@
 
         function completeAddMovie(title, imgData) {
             const selectedStatus = document.querySelector('input[name="newStatus"]:checked').value;
+            const docId = Date.now().toString();
             
-            const newMovie = {
-                id: Date.now(),
+            const newMovieData = {
                 title: title,
                 img: imgData,
                 status: selectedStatus,
                 rating: 0,
-                synopsis: ""
+                synopsis: "",
+                createdAt: Date.now()
             };
 
-            movies.unshift(newMovie);
+            // Salva direto na nuvem (o onSnapshot vai atualizar a tela automaticamente)
+            saveMovieToCloud(docId, newMovieData);
             
             document.getElementById('newTitle').value = "";
             document.getElementById('newImgFile').value = "";
             document.getElementById('fileNameDisplay').innerHTML = 'Tocar para escolher foto da galeria<br><span class="text-xs font-normal opacity-70">(ou deixe vazio para uma capa padrão)</span>';
             document.querySelector('input[value="conchinha"]').checked = true;
             
-            save();
-            closeAddModal();
+            window.closeAddModal();
         }
 
-        function updateFileName(input) {
+        window.updateFileName = function(input) {
             const display = document.getElementById('fileNameDisplay');
             if (input.files && input.files.length > 0) {
                 display.innerHTML = `<span class="text-rose-400 font-bold">✅ Foto pronta!</span><br><span class="text-xs truncate max-w-[200px] inline-block mt-1 text-rose-200 bg-rose-950/50 px-2 py-1 rounded-md border border-rose-900/50">${input.files[0].name}</span>`;
@@ -307,7 +396,7 @@
             }
         }
 
-        function showModal(tag, title, content, onConfirm = closeModal) {
+        window.showModal = function(tag, title, content, onConfirm = window.closeModal) {
             document.getElementById('modal-tag').innerText = tag;
             document.getElementById('modal-title').innerText = title;
             document.getElementById('modal-content').innerText = content;
@@ -318,81 +407,69 @@
             btn.onclick = onConfirm;
         }
 
-        function changeStatus(id, newStatus) {
+        window.changeStatus = function(id, newStatus) {
             const movie = movies.find(m => m.id === id);
-            if (movie) movie.status = newStatus;
-            save();
-        }
-
-        function rate(id, val) {
-            const movie = movies.find(m => m.id === id);
-            if (movie) movie.rating = val;
-            save();
-        }
-
-        function deleteMovie(id) {
-            if (confirm("Deseja remover este filme?")) {
-                movies = movies.filter(m => m.id !== id);
-                save();
+            if (movie) {
+                const updatedMovie = { ...movie, status: newStatus };
+                delete updatedMovie.id; // limpa a cópia do ID local antes de mandar pros dados do Firestore
+                saveMovieToCloud(id, updatedMovie);
             }
         }
 
-        function setFilter(filter) {
-            currentFilter = filter;
-            document.querySelectorAll('[id^="filter-"]').forEach(btn => {
-                btn.className = "bg-slate-900/60 hover:bg-slate-800 text-rose-200 px-6 py-2.5 rounded-full text-sm font-semibold transition-all whitespace-nowrap border border-rose-900/30 hover:border-rose-500/50";
-            });
-            document.getElementById(`filter-${filter}`).className = "bg-rose-600 text-white px-6 py-2.5 rounded-full text-sm font-bold transition-all shadow-lg shadow-rose-900/40 whitespace-nowrap border border-rose-500";
-            render();
+        window.rate = function(id, val) {
+            const movie = movies.find(m => m.id === id);
+            if (movie) {
+                const updatedMovie = { ...movie, rating: val };
+                delete updatedMovie.id;
+                saveMovieToCloud(id, updatedMovie);
+            }
         }
 
-        function randomPick() {
+        window.deleteMovie = function(id) {
+            if (confirm("Deseja remover este filme para sempre?")) {
+                deleteMovieFromCloud(id);
+            }
+        }
+
+        window.randomPick = function() {
             const pending = movies.filter(m => m.status !== 'assistido');
             if (pending.length === 0) return alert("Vocês já viram todos os filmes da lista!");
             const random = pending[Math.floor(Math.random() * pending.length)];
             
             const ondeVer = random.status === 'cinema' ? "Para ver no Cinema 🍿" : "Sessão de Conchinha 🛋️";
             
-            showModal("🎲 O Destino Escolheu", random.title, ondeVer, () => {
-                closeModal();
-                scrollToMovie(random.id, random.status);
+            window.showModal("🎲 O Destino Escolheu", random.title, ondeVer, () => {
+                window.closeModal();
+                window.scrollToMovie(random.id, random.status);
             });
         }
 
-        // Função para deslizar a tela até o filme e destacá-lo
-        function scrollToMovie(id, status) {
-            // Se o filme sorteado não estiver na aba atual, muda para a aba correta
+        window.scrollToMovie = function(id, status) {
             if (currentFilter !== 'all' && currentFilter !== status) {
-                setFilter(status);
+                window.setFilter(status);
             }
             
-            // Aguarda um instante para a grade renderizar se tiver mudado de filtro
             setTimeout(() => {
                 const card = document.getElementById(`movie-${id}`);
                 if (card) {
-                    // Desliza a tela suavemente até a capa
                     card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    // Adiciona a animação de destaque
                     card.classList.add('highlight-active');
-                    // Remove a classe após a animação (3 segundos)
-                    setTimeout(() => {
-                        card.classList.remove('highlight-active');
-                    }, 3000);
+                    setTimeout(() => { card.classList.remove('highlight-active'); }, 3000);
                 }
             }, 100);
         }
 
-        function closeModal() {
+        window.closeModal = function() {
             document.getElementById('modal').classList.add('hidden');
             document.getElementById('modal').classList.remove('flex');
         }
 
-        function openAddModal() {
+        window.openAddModal = function() {
             document.getElementById('add-movie-modal').classList.remove('hidden');
             document.getElementById('add-movie-modal').classList.add('flex');
         }
 
-        function closeAddModal() {
+        window.closeAddModal = function() {
             document.getElementById('add-movie-modal').classList.add('hidden');
             document.getElementById('add-movie-modal').classList.remove('flex');
         }
@@ -418,12 +495,13 @@
 
             filtered.forEach(m => {
                 const card = document.createElement("div");
-                card.id = `movie-${m.id}`; // Adicionando ID único para poder buscar o card depois
+                card.id = `movie-${m.id}`;
                 card.className = `movie-card relative bg-slate-900/50 backdrop-blur-sm rounded-3xl overflow-hidden shadow-xl border border-rose-900/20 flex flex-col group hover:border-rose-500/50 transition-all`;
 
                 let starsHtml = "";
                 for(let i=1; i<=5; i++) {
-                    starsHtml += `<button type="button" class="cursor-pointer text-2xl drop-shadow-md transition-all p-1 -m-1 active:scale-125 ${i <= m.rating ? 'text-rose-500 scale-110' : 'text-white/20 md:hover:text-rose-300'}" onclick="rate(${m.id}, ${i})">♥</button>`;
+                    // ID envolto em aspas simples pois agora o ID é um texto (string) da nuvem
+                    starsHtml += `<button type="button" class="cursor-pointer text-2xl drop-shadow-md transition-all p-1 -m-1 active:scale-125 ${i <= m.rating ? 'text-rose-500 scale-110' : 'text-white/20 md:hover:text-rose-300'}" onclick="rate('${m.id}', ${i})">♥</button>`;
                 }
 
                 card.innerHTML = `
@@ -450,17 +528,17 @@
                             <div class="flex flex-col gap-2 translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
                                 <p class="text-[10px] text-center text-rose-200 font-bold uppercase tracking-wider mb-1">Mudar Categoria:</p>
                                 <div class="flex gap-2">
-                                    <button onclick="changeStatus(${m.id}, 'conchinha')" class="flex-1 ${m.status === 'conchinha' ? 'bg-pink-600 border-pink-400 shadow-md' : 'bg-white/10 border-white/10 hover:bg-white/20'} text-white text-lg py-1.5 rounded-xl border backdrop-blur-md transition-all" title="Ver de Conchinha">
+                                    <button onclick="changeStatus('${m.id}', 'conchinha')" class="flex-1 ${m.status === 'conchinha' ? 'bg-pink-600 border-pink-400 shadow-md' : 'bg-white/10 border-white/10 hover:bg-white/20'} text-white text-lg py-1.5 rounded-xl border backdrop-blur-md transition-all" title="Ver de Conchinha">
                                         🛋️
                                     </button>
-                                    <button onclick="changeStatus(${m.id}, 'cinema')" class="flex-1 ${m.status === 'cinema' ? 'bg-purple-600 border-purple-400 shadow-md' : 'bg-white/10 border-white/10 hover:bg-white/20'} text-white text-lg py-1.5 rounded-xl border backdrop-blur-md transition-all" title="Ver no Cinema">
+                                    <button onclick="changeStatus('${m.id}', 'cinema')" class="flex-1 ${m.status === 'cinema' ? 'bg-purple-600 border-purple-400 shadow-md' : 'bg-white/10 border-white/10 hover:bg-white/20'} text-white text-lg py-1.5 rounded-xl border backdrop-blur-md transition-all" title="Ver no Cinema">
                                         🍿
                                     </button>
-                                    <button onclick="changeStatus(${m.id}, 'assistido')" class="flex-1 ${m.status === 'assistido' ? 'bg-rose-600 border-rose-400 shadow-md' : 'bg-white/10 border-white/10 hover:bg-white/20'} text-white text-lg py-1.5 rounded-xl border backdrop-blur-md transition-all" title="Já Assistimos">
+                                    <button onclick="changeStatus('${m.id}', 'assistido')" class="flex-1 ${m.status === 'assistido' ? 'bg-rose-600 border-rose-400 shadow-md' : 'bg-white/10 border-white/10 hover:bg-white/20'} text-white text-lg py-1.5 rounded-xl border backdrop-blur-md transition-all" title="Já Assistimos">
                                         ✅
                                     </button>
                                 </div>
-                                <button onclick="deleteMovie(${m.id})" class="mt-1 bg-rose-950/80 hover:bg-red-600 text-rose-300 hover:text-white px-3 py-2 rounded-xl transition-all border border-rose-800/50 backdrop-blur-md text-xs font-bold w-full flex items-center justify-center gap-2">
+                                <button onclick="deleteMovie('${m.id}')" class="mt-1 bg-rose-950/80 hover:bg-red-600 text-rose-300 hover:text-white px-3 py-2 rounded-xl transition-all border border-rose-800/50 backdrop-blur-md text-xs font-bold w-full flex items-center justify-center gap-2">
                                     <span>🗑️</span> Remover Filme
                                 </button>
                             </div>
@@ -479,7 +557,9 @@
         }
 
         document.getElementById("search").addEventListener("input", render);
-        render();
+        
+        // Iniciar o Aplicativo Cloud
+        startCloudApp();
     </script>
 </body>
 </html>
